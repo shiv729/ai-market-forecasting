@@ -1,0 +1,50 @@
+name: Daily forecasting study collection
+
+on:
+  schedule:
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: forecasting-study-state
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STUDY_DEADLINE: ${{ secrets.STUDY_DEADLINE }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[all]"
+      - name: Restore prior SQLite state
+        run: |
+          mkdir -p data
+          previous_run="$(gh run list --workflow daily-study.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -n "$previous_run" ]; then
+            gh run download "$previous_run" --name study-state --dir data
+          fi
+      - name: Collect daily observations
+        run: |
+          test -f data/study-manifest.json || { echo "Commit the frozen data/study-manifest.json before enabling collection." >&2; exit 1; }
+          forecast-study collect --config config/study.json --manifest data/study-manifest.json --database data/research.sqlite
+      - name: Upload durable run state
+        uses: actions/upload-artifact@v4
+        with:
+          name: study-state
+          path: data/research.sqlite
+          if-no-files-found: error
+          retention-days: 90

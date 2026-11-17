@@ -1,0 +1,11 @@
+{
+  "default": [
+    {
+      "url": "https://example.invalid/replace-with-a-real-source",
+      "title": "Illustrative evidence entry - replace before research",
+      "published_at": "2026-01-01T00:00:00Z",
+      "content": "PLACEHOLDER ONLY. Replace with a short excerpt from a real, timestamped public source before using manual evidence.",
+      "synthetic": true
+    }
+  ]
+}
