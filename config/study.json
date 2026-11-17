@@ -1,5 +1,6 @@
 {
   "study_id": "ai-vs-markets-primary",
+  "experiment_arm": "primary",
   "mode": "real",
   "study_deadline": null,
   "forecast_cutoff_hours_before_end": 0,

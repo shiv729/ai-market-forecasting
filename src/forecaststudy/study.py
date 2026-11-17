@@ -317,3 +317,46 @@ def manifest_from_file(path: str) -> Dict[str, Any]:
         manifest = json.load(file)
     verify_manifest(manifest)
     return manifest
+
+
+def clone_manifest(
+    source_path: str, output_path: str, config: StudyConfig
+) -> Dict[str, Any]:
+    source = manifest_from_file(source_path)
+    source_config = source.get("study_config", {})
+    shared_design_fields = (
+        "mode",
+        "study_deadline",
+        "forecast_cutoff_hours_before_end",
+        "max_snapshot_forecast_gap_seconds",
+        "min_liquidity_usd",
+        "min_volume_usd",
+        "max_spread",
+        "max_quote_age_seconds",
+    )
+    for key in shared_design_fields:
+        if source_config.get(key) != getattr(config, key):
+            raise ValueError(
+                "Cannot clone manifest: shared design setting '{}' differs".format(key)
+            )
+    if source.get("mode") != config.mode or source.get("study_deadline") != config.study_deadline:
+        raise ValueError("Cannot clone manifest with a different data mode or deadline")
+    if source.get("study_id") == config.study_id:
+        raise ValueError("Cloned study must use a distinct study_id")
+
+    manifest = dict(source)
+    manifest.pop("content_sha256", None)
+    manifest.update(
+        {
+            "study_id": config.study_id,
+            "study_config": config.__dict__,
+            "derived_from_manifest_sha256": source["content_sha256"],
+            "derived_at": iso_utc(utc_now()),
+        }
+    )
+    manifest["content_sha256"] = canonical_hash(manifest)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return manifest

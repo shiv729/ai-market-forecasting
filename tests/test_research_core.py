@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from forecaststudy.analysis import brier_score, evaluate
+import forecaststudy.collection as collection_module
 from forecaststudy.collection import collect
 from forecaststudy.config import StudyConfig
 from forecaststudy.db import connect, insert_resolution
@@ -24,11 +25,12 @@ from forecaststudy.polymarket import (
 from forecaststudy.providers import (
     ForecastOutputError,
     OpenAIResponsesProvider,
+    NoEvidenceResearchProvider,
     SyntheticResearchProvider,
     TavilyResearchProvider,
     evidence_is_excluded,
 )
-from forecaststudy.study import canonical_hash, register_manifest
+from forecaststudy.study import canonical_hash, clone_manifest, register_manifest
 
 
 def test_brier_score_and_probability_validation() -> None:
@@ -62,6 +64,26 @@ def test_prediction_market_evidence_is_excluded() -> None:
     assert not evidence_is_excluded(
     "https://official.example/report", "The agency published the final result."
     )
+
+
+def test_no_search_arm_uses_empty_evidence_without_research_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        collection_module,
+        "OpenAIResponsesProvider",
+        lambda api_key, model: object(),
+    )
+    config = StudyConfig(
+        study_id="no-search-test",
+        experiment_arm="no-search",
+        research_provider="none",
+        study_deadline="2027-01-01T00:00:00Z",
+    )
+    research, _ = collection_module._providers(config)
+    assert isinstance(research, NoEvidenceResearchProvider)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert research.retrieve(None, now, now) == []
 
 
 def test_yes_no_token_mapping_uses_labels_not_array_order() -> None:
@@ -462,9 +484,38 @@ def test_failed_forecast_is_not_scored_and_demo_reuses_daily_snapshot(tmp_path: 
     assert summary["not_enough_resolved_data"] is False
     assert summary["valid_paired_observations"] == 12
     assert "SYNTHETIC" in Path(result["exports"]["report"]).read_text(encoding="utf-8")
+    assert "Experiment arm: `primary`" in Path(result["exports"]["report"]).read_text(
+        encoding="utf-8"
+    )
+    assert "experiment_arm" in Path(result["exports"]["observations"]).read_text(
+        encoding="utf-8"
+    ).splitlines()[0]
 
     manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
     config = StudyConfig(**manifest["study_config"])
+    no_search_config = StudyConfig(**manifest["study_config"])
+    no_search_config.study_id = "synthetic-no-search"
+    no_search_config.experiment_arm = "no-search"
+    no_search_config.research_provider = "none"
+    no_search_config.research_config = {}
+    no_search_config.data_dir = str(tmp_path / "no-search")
+    no_search_manifest = clone_manifest(
+        result["manifest"],
+        str(tmp_path / "no-search" / "manifest.json"),
+        no_search_config,
+    )
+    assert no_search_manifest["derived_from_manifest_sha256"] == manifest["content_sha256"]
+    assert no_search_manifest["study_config"]["experiment_arm"] == "no-search"
+    assert [
+        item["market_id"] for item in no_search_manifest["markets"]
+    ] == [item["market_id"] for item in manifest["markets"]]
+    assert no_search_manifest["content_sha256"] == canonical_hash(
+        {
+            key: value
+            for key, value in no_search_manifest.items()
+            if key != "content_sha256"
+        }
+    )
     now = datetime.fromisoformat(manifest["created_at"].replace("Z", "+00:00")).replace(
         hour=12, minute=0, second=0, microsecond=0
     )

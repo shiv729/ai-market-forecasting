@@ -32,7 +32,13 @@ except (sqlite3.Error, ValueError, OSError) as exc:
     st.stop()
 
 mode = result.get("mode", "unknown")
-st.info("Data mode: **{}**{}".format(mode.upper(), " — synthetic fixtures are not real results." if mode == "synthetic" else ""))
+st.info(
+    "Data mode: **{}** · Experiment arm: **{}**{}".format(
+        mode.upper(),
+        result.get("experiment_arm", "primary"),
+        " — synthetic fixtures are not real results." if mode == "synthetic" else "",
+    )
+)
 st.subheader("Frozen study configuration")
 st.json(result.get("configuration", {}))
 

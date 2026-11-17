@@ -13,7 +13,7 @@ from .db import connect
 from .demo import run_demo
 from .polymarket import PolymarketClient
 from .reporting import export_study
-from .study import build_candidate_report, enroll, register_manifest
+from .study import build_candidate_report, clone_manifest, enroll, register_manifest
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -36,6 +36,14 @@ def _parser() -> argparse.ArgumentParser:
     enrollment.add_argument("--count", type=int, default=50)
     enrollment.add_argument("--random", action="store_true", help="select randomly with a recorded seed")
     enrollment.add_argument("--seed", type=int, default=None)
+
+    clone = subparsers.add_parser(
+        "clone-manifest",
+        help="freeze a new experiment config on an existing enrolled market set",
+    )
+    clone.add_argument("--config", required=True)
+    clone.add_argument("--source", required=True)
+    clone.add_argument("--output", required=True)
 
     collection = subparsers.add_parser("collect", help="collect one daily forecast per enrolled market")
     collection.add_argument("--config", default="config/study.json")
@@ -139,6 +147,29 @@ def _do_enroll(args: argparse.Namespace) -> int:
     return 0
 
 
+def _do_clone_manifest(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    manifest = clone_manifest(args.source, args.output, config)
+    connection = connect(_database_path(config, None))
+    try:
+        register_manifest(connection, manifest, config)
+    finally:
+        connection.close()
+    print(
+        json.dumps(
+            {
+                "manifest": args.output,
+                "sha256": manifest["content_sha256"],
+                "source_sha256": manifest["derived_from_manifest_sha256"],
+                "experiment_arm": config.experiment_arm,
+                "enrolled": len(manifest.get("markets", [])),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def _do_collect(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     result = collect(
@@ -198,6 +229,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _do_discover(args)
         if args.command == "enroll":
             return _do_enroll(args)
+        if args.command == "clone-manifest":
+            return _do_clone_manifest(args)
         if args.command == "collect":
             return _do_collect(args)
         if args.command == "resolve":

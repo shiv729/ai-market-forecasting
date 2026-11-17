@@ -296,6 +296,9 @@ def evaluate(
     summary.update(
         {
             "study_id": study_id,
+            "experiment_arm": manifest.get("study_config", {}).get(
+                "experiment_arm", "primary"
+            ),
             "mode": mode,
             "manifest_sha256": manifest.get("content_sha256"),
             "study_deadline": manifest.get("study_deadline"),
