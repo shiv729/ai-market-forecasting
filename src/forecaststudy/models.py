@@ -135,6 +135,7 @@ class Resolution:
 @dataclass
 class StudyConfig:
     study_id: str = "ai-vs-markets-primary"
+    experiment_arm: str = "primary"
     mode: str = "real"
     study_deadline: Optional[str] = None
     forecast_cutoff_hours_before_end: int = 0
@@ -166,6 +167,12 @@ class StudyConfig:
     def validate(self) -> None:
         if self.mode not in {"real", "synthetic"}:
             raise ValueError("mode must be 'real' or 'synthetic'")
+        if not self.study_id.strip():
+            raise ValueError("study_id cannot be empty")
+        if not self.experiment_arm.strip():
+            raise ValueError("experiment_arm cannot be empty")
+        if self.research_provider not in {"tavily", "manual", "none"}:
+            raise ValueError("research_provider must be 'tavily', 'manual', or 'none'")
         if not self.study_deadline:
             raise ValueError(
                 "Set a study_deadline in config/study.json or STUDY_DEADLINE in .env"

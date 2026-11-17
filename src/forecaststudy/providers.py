@@ -238,6 +238,15 @@ class ManualEvidenceProvider:
         return result
 
 
+class NoEvidenceResearchProvider:
+    name = "none"
+
+    def retrieve(
+        self, market: MarketCandidate, retrieved_at: datetime, cutoff: datetime
+    ) -> List[Evidence]:
+        return []
+
+
 class OpenAIResponsesProvider:
     name = "openai"
 

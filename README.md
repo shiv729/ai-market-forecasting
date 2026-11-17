@@ -22,7 +22,7 @@ cp .env.example .env
 
 Edit `.env` and set `STUDY_DEADLINE` to the preregistered ISO-8601 UTC timestamp (for example `2027-06-30T23:59:59Z`). There is deliberately no semester date or deadline embedded in the code. For real model forecasts set `OPENAI_API_KEY`; for current web search also set `TAVILY_API_KEY`. The public Polymarket data endpoints used here do not require authentication. Do not put keys in the study config, database, or manifest.
 
-The primary default identifier is `gpt-4o-mini`, the prompt version is `primary-v1`, the primary quote is the midpoint of the YES token's best bid/ask, and the default research provider is Tavily. Decide the study deadline, thresholds, model, research setup, run limits, and cost controls before enrollment. Freeze the resulting configuration in the manifest; changes to model, prompt, evidence setup, or forecast cutoff should be treated as a separate study/configuration.
+The configured default model identifier is `gpt-4o-mini`, the prompt version is `primary-v1`, the primary quote is the midpoint of the YES token's best bid/ask, and the default research provider is Tavily. The model identifier is an explicit reproducibility choice, not a claim that this model is the strongest forecaster. Decide the deadline, thresholds, model, evidence setup, run limits, and cost controls before enrollment. The manifest freezes the model/provider/prompt. To compare a different model, use a new `study_id` and `experiment_arm` in a copied config and derive its manifest with `clone-manifest`; do not change the model under an existing study ID.
 
 ## Synthetic end-to-end demo
 
@@ -63,6 +63,21 @@ forecast-study collect --config config/study.json --manifest data/study-manifest
 
 Repeat `collect` once per day. A market/date has one primary snapshot; retries retain that original quote and are logged as separate attempts. A successful rerun on the same UTC date is a no-op. Failed research/model calls never become a 0.5 forecast. If the market quote is unusable, its issue is saved and it is not included in paired scoring.
 
+### Matched no-search baseline
+
+The no-search arm uses the same model and prompt, but supplies no retrieved evidence. It is a separately frozen study with its own database and forecasts, while `clone-manifest` preserves the primary arm's enrolled markets. Market probabilities are captured at each arm's own forecast time, so each AI forecast is paired with its contemporaneous quote; the two arms are not guaranteed to use the exact same quote if collected at different times.
+
+```bash
+forecast-study clone-manifest --config config/study-no-search.json --source data/study-manifest.json --output data/no-search/study-manifest.json
+forecast-study collect --config config/study-no-search.json --manifest data/no-search/study-manifest.json --dry-run
+forecast-study collect --config config/study-no-search.json --manifest data/no-search/study-manifest.json
+forecast-study resolve --config config/study-no-search.json --manifest data/no-search/study-manifest.json
+forecast-study evaluate --config config/study-no-search.json
+forecast-study export --config config/study-no-search.json --output-dir data/no-search/exports
+```
+
+`clone-manifest` refuses changes to shared market-selection design fields and records the source manifest hash. The checked-in `config/study-no-search.json` uses the same `gpt-4o-mini` model as the primary configuration, but sets `research_provider` to `none`; it makes no search-provider requests. For a different model, copy the config, choose a unique study ID and arm name, set the model identifier, and clone the same source manifest. Results from separately frozen arms should be interpreted with the manifest, coverage, and any collection-time differences. A market-plus-AI adjustment is intentionally omitted: without an a priori coefficient/selection rule it would invite post-hoc tuning.
+
 Refresh resolutions and generate analysis/exports whenever needed:
 
 ```bash
@@ -92,7 +107,7 @@ Tavily search is an optional paid/current-evidence integration. If using manual 
 
 Approximate model workload is **markets × collection days × model calls per forecast** (including malformed-output retries). Search calls are separately capped. Provider prices change; configure researcher-owned token price estimates if you need an estimated daily spend cap. The cap reserves estimated input/output cost before each model request and records actual token usage/cost estimates when available; these are not guaranteed charges.
 
-An optional GitHub Actions workflow runs daily or manually. It serializes jobs with a concurrency group, restores the prior successful run's `study-state` artifact, and uploads the updated SQLite database/raw records as the next artifact. Artifact retention is 90 days; this is cross-run persistence, not archival storage. Keep the frozen manifest committed at `data/study-manifest.json`, configure repository secrets `STUDY_DEADLINE`, `OPENAI_API_KEY`, and `TAVILY_API_KEY`, and enable Actions. A failed artifact upload can lose that run's new state; copy/export data to institution-managed durable storage for long-term preservation. Local collection remains fully functional without Actions.
+The optional GitHub Actions workflow runs daily or manually and stores SQLite state only in a separate private repository; it does not upload the database as an artifact or commit study data to this (potentially public) source repository. Create a private backup repository, create a `study-state` branch in it, and configure `STUDY_BACKUP_REPOSITORY` (`owner/repo`) and `STUDY_BACKUP_TOKEN` as Actions secrets. Use a fine-grained token scoped only to that private repository with Contents read/write permission. The workflow verifies the target repository is private before restoring or pushing `research.sqlite`; database history is retained as Git commits, so monitor storage growth and maintain any institutional backup requirements separately. Also configure `STUDY_DEADLINE`, `OPENAI_API_KEY`, and `TAVILY_API_KEY` as needed. Scheduled collection intentionally fails if private persistence is unavailable. Local collection remains fully functional without Actions.
 
 ## Results and limitations
 

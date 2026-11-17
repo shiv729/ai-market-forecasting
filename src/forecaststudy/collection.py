@@ -24,6 +24,7 @@ from .models import (
 from .polymarket import PolymarketClient, quote_from_order_book, resolution_from_api
 from .providers import (
     ManualEvidenceProvider,
+    NoEvidenceResearchProvider,
     OpenAIResponsesProvider,
     SyntheticForecastProvider,
     SyntheticResearchProvider,
@@ -61,6 +62,8 @@ def _providers(config: StudyConfig) -> Tuple[Any, Any]:
         research = TavilyResearchProvider(
             os.getenv("TAVILY_API_KEY"), config.research_config
         )
+    elif config.research_provider == "none":
+        research = NoEvidenceResearchProvider()
     elif config.research_provider == "manual":
         evidence_path = Path(config.evidence_file)
         if not evidence_path.exists():
@@ -117,6 +120,7 @@ def _validate_frozen_config(manifest: Dict[str, Any], config: StudyConfig) -> No
     for key in (
         "mode",
         "study_deadline",
+        "experiment_arm",
         "forecast_cutoff_hours_before_end",
         "model_provider",
         "model",

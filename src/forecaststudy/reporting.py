@@ -42,6 +42,7 @@ def markdown_report(summary: Dict[str, Any]) -> str:
         "## Study coverage",
         "",
         "- Study ID: `{}`".format(summary.get("study_id")),
+        "- Experiment arm: `{}`".format(summary.get("experiment_arm", "primary")),
         "- Manifest SHA-256: `{}`".format(summary.get("manifest_sha256")),
         "- Study deadline: `{}`".format(summary.get("study_deadline")),
         "- Configuration: `{}`".format(
@@ -134,6 +135,7 @@ def export_study(
         pd.DataFrame().to_csv(observations_path, index=False)
         pd.DataFrame().to_csv(market_path, index=False)
     else:
+        observations.insert(0, "experiment_arm", summary.get("experiment_arm", "primary"))
         observations.insert(0, "data_mode", config_mode)
         observations.to_csv(observations_path, index=False)
         scored = observations[observations.get("paired_valid", False)].copy()
