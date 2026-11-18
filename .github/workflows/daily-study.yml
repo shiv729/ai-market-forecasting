@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -30,22 +31,72 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[all]"
-      - name: Verify private backup target
+      - name: Check collection prerequisites
+        id: preflight
         run: |
-          if [ -z "$STUDY_BACKUP_REPOSITORY" ] || [ -z "$STUDY_BACKUP_TOKEN" ]; then
-            echo "Configure STUDY_BACKUP_REPOSITORY and STUDY_BACKUP_TOKEN for private persistence." >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          errors = []
+          config = None
+          try:
+              from forecaststudy.config import load_config
+              config = load_config("config/study.json")
+          except Exception as exc:
+              errors.append("study config/deadline is not ready ({})".format(type(exc).__name__))
+
+          manifest_path = Path("data/study-manifest.json")
+          if not manifest_path.is_file():
+              errors.append("frozen data/study-manifest.json is missing")
+          elif config is not None:
+              try:
+                  from forecaststudy.collection import _validate_frozen_config
+                  from forecaststudy.study import manifest_from_file
+                  _validate_frozen_config(
+                      manifest_from_file(str(manifest_path)), config
+                  )
+              except Exception as exc:
+                  errors.append("frozen manifest is invalid or mismatched ({})".format(type(exc).__name__))
+
+          if config is not None and config.mode == "real":
+              if config.model_provider == "openai" and not os.getenv("OPENAI_API_KEY"):
+                  errors.append("OPENAI_API_KEY is missing")
+              if config.research_provider == "tavily" and not os.getenv("TAVILY_API_KEY"):
+                  errors.append("TAVILY_API_KEY is missing")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("collection_ready={}\n".format("false" if errors else "true"))
+          if errors:
+              for error in errors:
+                  print("::notice::Collection skipped: {}".format(error))
+          else:
+              print("Collection prerequisites are ready.")
+          PY
+      - name: Report partial private backup configuration
+        if: (env.STUDY_BACKUP_REPOSITORY == '') != (env.STUDY_BACKUP_TOKEN == '')
+        run: echo "::warning::Private backup needs both STUDY_BACKUP_REPOSITORY and STUDY_BACKUP_TOKEN; using workflow artifacts instead."
+      - name: Verify private backup target
+        id: verify-private-backup
+        if: steps.preflight.outputs.collection_ready == 'true' && env.STUDY_BACKUP_REPOSITORY != '' && env.STUDY_BACKUP_TOKEN != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.STUDY_BACKUP_TOKEN }}
+        run: |
           if [ "$STUDY_BACKUP_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
-            echo "Study data cannot be backed up to the study repository." >&2
+            echo "Private backup target must differ from the study repository." >&2
             exit 1
           fi
-          private="$(GH_TOKEN="$STUDY_BACKUP_TOKEN" gh api "repos/$STUDY_BACKUP_REPOSITORY" --jq .private)"
+          private="$(gh api "repos/$STUDY_BACKUP_REPOSITORY" --jq .private)"
           if [ "$private" != "true" ]; then
-            echo "Study backup target must be a private repository." >&2
+            echo "Private backup target is not private." >&2
             exit 1
           fi
+          echo "Private backup target verified."
       - name: Check out private study-state repository
+        id: checkout-private-backup
+        if: steps.verify-private-backup.outcome == 'success'
+        continue-on-error: true
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.STUDY_BACKUP_REPOSITORY }}
@@ -53,17 +104,37 @@ jobs:
           token: ${{ secrets.STUDY_BACKUP_TOKEN }}
           path: private-study-state
           persist-credentials: true
-      - name: Restore prior SQLite state
+      - name: Restore SQLite state from private repository
+        if: steps.checkout-private-backup.outcome == 'success' && steps.preflight.outputs.collection_ready == 'true'
         run: |
           mkdir -p data
           if [ -f private-study-state/research.sqlite ]; then
             cp private-study-state/research.sqlite data/research.sqlite
           fi
-      - name: Collect daily observations
+      - name: Restore SQLite state from prior workflow artifact
+        if: steps.preflight.outputs.collection_ready == 'true' && steps.checkout-private-backup.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          test -f data/study-manifest.json || { echo "Commit the frozen data/study-manifest.json before enabling collection." >&2; exit 1; }
+          mkdir -p data
+          while IFS= read -r run_id; do
+            [ -n "$run_id" ] || continue
+            if gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name study-state --dir data; then
+              echo "Restored study-state from workflow run $run_id."
+              exit 0
+            fi
+            rm -f data/research.sqlite
+          done < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow daily-study.yml --branch "$GITHUB_REF_NAME" --status success --limit 10 --json databaseId --jq '.[].databaseId')
+          echo "::warning::No recent study-state artifact was available; starting a new database."
+      - name: Collect daily observations
+        id: collect
+        if: steps.preflight.outputs.collection_ready == 'true'
+        run: |
           forecast-study collect --config config/study.json --manifest data/study-manifest.json --database data/research.sqlite
       - name: Persist SQLite state to private repository
+        id: persist-private
+        if: steps.collect.outcome == 'success' && steps.checkout-private-backup.outcome == 'success'
+        continue-on-error: true
         run: |
           cp data/research.sqlite private-study-state/research.sqlite
           git -C private-study-state config user.name "github-actions[bot]"
@@ -75,3 +146,14 @@ jobs:
             git -C private-study-state commit -m "Update study state $(date -u +%F)"
             git -C private-study-state push origin HEAD:study-state
           fi
+      - name: Report temporary artifact fallback
+        if: steps.collect.outcome == 'success' && steps.persist-private.outcome != 'success'
+        run: echo "::notice::Private persistence was unavailable; retaining SQLite state in a 90-day workflow artifact."
+      - name: Upload fallback SQLite artifact
+        if: steps.collect.outcome == 'success' && steps.persist-private.outcome != 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: study-state
+          path: data/research.sqlite
+          if-no-files-found: error
+          retention-days: 90
